@@ -1,40 +1,61 @@
 import discord
-import responses
+import youtube_dl
 import creds
 
-async def send_message(message, user_message, is_private):
-    try:
-        response = responses.handle_response(user_message)
-        await message.author.send(response) if is_private else await message.channel.send(response)
+from discord.ext import commands
 
-    except Exception as e:
-        print(e)
+intents = discord.Intents.all()
+# Allows users to create commands by starting their command with !
+bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Defines an event handler for when the bot is ready to start processing commands
+@bot.event
+async def on_ready():
+    print(f'{bot.user.name} has connected to Discord!')
 
-def run_discord_bot():
-    TOKEN = creds.token
-    intents = discord.Intents.default()
-    intents.message_content = True
-    client = discord.Client(intents=intents)
+# Define the play command that takes a url as an argument
+@bot.command()
+async def play(ctx, url):
+    if not ctx.message.author.voice:
+        await ctx.send("You are not connected to a voice channel")
+        return
 
-    @client.event
-    async def on_ready():
-        print(f'{client.user} is ready!')
+    # Sends the bot to the current voice channel the user is in
+    channel = ctx.message.author.voice.channel
+    voice_client = await channel.connect()
 
-    @client.event
-    async def on_message(message):
-        if message.author == client.user:
+    # Checks to see if the client is already playing. If it is, it will stop
+    if voice_client.is_playing():
+        voice_client.stop()
 
-        username = str(message.author)
-        user_message = str(message.content)
-        channel = str(message.channel)
+    # Dict of options that will be passed to youtube-dl when it downloads the audio from YouTube
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': 'audio/%(id)s.%(ext)s',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192'
+        }]
+    }
 
-        print(f"{username} said: '{user_message}' ({channel})")
+    # Creates a youtube-dl instance which uses the opts, then downloads the audio from the specified url
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info)
+        source = await discord.FFmpegOpusAudio.from_probe(filename)
 
-        if user_message[0] == '?':
-            user_message = user_message[1:]
-            await send_message(message, user_message, is_private=True)
-        else:
-            await send_message(message, user_message, is_private=False)
+    # Plays the audio in the voice channel and outputs a message saying what it is playing
+    voice_client.play(source)
+    await ctx.send(f"Now playing: {info['title']}")
 
-    client.run(TOKEN)
+# Allows users to stop the bot and disconnects the bot from the voice channel
+@bot.command()
+async def stop(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("Bot disconnected")
+    else:
+        await ctx.send("I am not connected to a voice channel")
+
+bot.run(creds.token)
